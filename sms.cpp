@@ -1,3 +1,21 @@
+//-----------------------------------------------------------------------------
+//      Project:     SMS signature
+//-----------------------------------------------------------------------------
+
+//******************************************************************************
+//      Copyright (C) 2024   Li Peigen
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+//(at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License (file LICENCE) for more details.
+//*******************************************************************************
+
 #include <iostream>
 #include <ctime>
 #include <eigen-3.4.0/Eigen/Core>
@@ -11,22 +29,15 @@ using namespace Eigen;
 int mod_q(int a, int q)
 {
     int t = a % q;
-    if (t < 0)
-        return t + q;
-    else
-        return t;
+    return (t < 0) ? (t + q) : t;
 }
 
 // inv_mod q
 int inv_mod(int x, int q)
 {
-    if (x % q == 0)
+    x = mod_q(x, q);
+    if (x == 0)
         return 0;
-    x = x % q;
-    while (x < 0)
-    {
-        x = x + q;
-    }
     int y = 1;
     while ((x * y) % q != 1)
     {
@@ -44,7 +55,7 @@ MatrixXd mod(MatrixXd a, int q)
     {
         for (int j = 0; j < m; j++)
         {
-            a(i, j) = int(a(i, j)) % q;
+            a(i, j) = mod_q(a(i, j), q);
         }
     }
     return a;
@@ -84,7 +95,6 @@ MatrixXd upper(MatrixXd mat, int q)
             for (int v = j; v < m; v++)
             {
                 mat(j, v) = mod_q(mat(j, v), q);
-                // mat(j, v) = int(mat(j, v)) % q;
             }
             // let mat(u,j)=0 for u>j;
             for (int u = j + 1; u < n; u++)
@@ -131,12 +141,48 @@ MatrixXd solve_upp(MatrixXd U, int q)
         for (int i = k + 1; i < n; i++)
         {
             s = s + U(k, i) * x(i, 0);
+            // s = s % q;
         }
         x(k, 0) = mod_q(U(k, n) - s, q);
     }
     return x;
 }
 
+// 二次型乘法
+int quadratic(MatrixXd A, MatrixXd x, int q)
+{
+    int n = A.rows();
+    int s = 0;
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+        {
+            s = s + A(i, j) * x(i, 0) * x(j, 0);
+            s = s % q;
+        }
+    return s;
+}
+
+// matrix乘法
+MatrixXd matrix_mul(MatrixXd A, MatrixXd B, int q)
+{
+    int n = A.rows();
+    int m = A.cols();
+    int t = B.cols();
+    MatrixXd R(n, t);
+    for (int i = 0; i < n; i++)
+    {
+        for (int j = 0; j < t; j++)
+        {
+            R(i, j) = 0;
+            for (int k = 0; k < m; k++)
+            {
+                R(i, j) = R(i, j) + A(i, k) * B(k, j);
+                R(i, j) = int(R(i, j)) % q;
+            }
+        }
+    }
+    return R;
+}
 // verify
 bool verify(MatrixXd *P, MatrixXd x, MatrixXd y, int q)
 {
@@ -144,7 +190,9 @@ bool verify(MatrixXd *P, MatrixXd x, MatrixXd y, int q)
     int m = y.rows();
     for (int k = 0; k < m; k++)
     {
-        int y0 = int((x.transpose() * P[k] * x)(0, 0) - y(k, 0));
+        // int y0 = int((x.transpose() * P[k] * x)(0, 0) - y(k, 0));
+        int y1 = quadratic(P[k], x, q);
+        int y0 = y1 - y(k, 0);
         if (y0 % q != 0)
         {
             ver = 0;
@@ -188,7 +236,7 @@ MatrixXd *Sec(int n, int m, int r, int q)
 {
     int o = m + r;
     int v = n - o;
-    MatrixXd *myF = new MatrixXd[m + 4];
+    MatrixXd *myF = new MatrixXd[m + 3];
     for (int k = 0; k < m; k++)
     {
         myF[k] = MatrixXd::Zero(n, n);
@@ -223,6 +271,7 @@ MatrixXd *Pub(MatrixXd *F, int m, int r, int q)
     MatrixXd St = S.transpose();
 
     MatrixXd C = St * A * B * S;
+    // MatrixXd C = matrix_mul(matrix_mul(matrix_mul(St, A, q), B, q), S, q);
 
     MatrixXd *myP = new MatrixXd[m];
     for (int i = 0; i < m; i++)
@@ -234,6 +283,7 @@ MatrixXd *Pub(MatrixXd *F, int m, int r, int q)
 
         myP[i].block(0, 0, v, v) = F1;
         myP[i].block(0, v, v, o) = F1 * s + F2;
+        // myP[i].block(0, v, v, o) = matrix_mul(F1, s, q) + F2;
         myP[i].block(v, 0, o, v) = (myP[i].block(0, v, v, o)).transpose();
         myP[i].block(v, v, o, o) = st * (myP[i].block(0, v, v, o)) + (F2.transpose()) * s;
 
@@ -320,10 +370,23 @@ MatrixXd signature(MatrixXd *F, MatrixXd y, int q)
     }
     return sign;
 }
-
+void print_size(int n, int m, int r, int q)
+{
+    int pk_size;
+    int sk_size;
+    int sig_size;
+    int o = n + r;
+    int v = n - o;
+    pk_size = ((n + 1) * n / 2) * m * log2(q) / (8 * 1024);
+    sk_size = (r * n * 2 + v * o) * log2(q) / 8;
+    sig_size = n * log2(q) / 8;
+    cout << "The size of public key is " << pk_size << "Kb" << endl;
+    cout << "The size of secret key is " << sk_size << "Bytes" << endl;
+    cout << "The size of signature is " << sig_size << "Bytes" << endl;
+}
 int main()
 {
-    int n = 159, m = 40, r = 2, q = 31;
+    int n = 136, m = 8, r = 2, q = 31;
     int times = 1;
     srand(time(0));
 
@@ -423,6 +486,6 @@ int main()
             cout << "The method is failed!" << endl;
         }
     }
-    
+    print_size(n, m, r, q);
     return 0;
 }
